@@ -97,9 +97,53 @@
             useEffect(() => {
                 const saved = localStorage.getItem('subscriptions');
                 if (saved) {
-                    setSubscriptions(JSON.parse(saved));
+                    const loadedSubs = JSON.parse(saved);
+                    // Auto-advance expired dates for auto-renewal subscriptions
+                    const updatedSubs = autoAdvanceRenewalDates(loadedSubs);
+                    setSubscriptions(updatedSubs);
+                    
+                    // Check if sync was previously enabled
+                    const syncWasEnabled = localStorage.getItem('syncWasEnabled');
+                    if (syncWasEnabled === 'true') {
+                        // Prompt user to re-enable sync
+                        setTimeout(() => {
+                            if (confirm('Sync was previously enabled. Would you like to select your sync file to re-enable sync?')) {
+                                loadFromSyncFile();
+                            }
+                        }, 500);
+                    }
                 }
             }, []);
+
+            // Auto-advance renewal dates for expired subscriptions
+            const autoAdvanceRenewalDates = (subs) => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                
+                return subs.map(sub => {
+                    // Only auto-advance if: Auto Renewal = Yes AND Status = WILL RENEW
+                    if (sub.autoRenewal === 'Yes' && sub.status === 'WILL RENEW') {
+                        let expirationDate = new Date(sub.nextExpiration);
+                        
+                        // Keep advancing until date is in the future
+                        while (expirationDate < today) {
+                            if (sub.type === 'MONTHLY') {
+                                expirationDate.setMonth(expirationDate.getMonth() + 1);
+                            } else if (sub.type === 'YEARLY') {
+                                expirationDate.setFullYear(expirationDate.getFullYear() + 1);
+                            }
+                        }
+                        
+                        // If date was advanced, update it
+                        const newDateString = expirationDate.toISOString().split('T')[0];
+                        if (newDateString !== sub.nextExpiration) {
+                            return { ...sub, nextExpiration: newDateString };
+                        }
+                    }
+                    
+                    return sub;
+                });
+            };
 
             // Save subscriptions to localStorage whenever they change
             useEffect(() => {
@@ -190,6 +234,7 @@
                     // Save the file handle (note: this won't persist across sessions in most browsers)
                     setSyncFileHandle(handle);
                     setSyncEnabled(true);
+                    localStorage.setItem('syncWasEnabled', 'true');
                     
                     // Immediately sync current data
                     await saveToSyncFile(handle, subscriptions);
@@ -237,6 +282,7 @@
                         setSubscriptions(data);
                         setSyncFileHandle(handle);
                         setSyncEnabled(true);
+                        localStorage.setItem('syncWasEnabled', 'true');
                         setLastSyncTime(new Date());
                         alert('Data loaded and sync enabled! Changes will auto-save to this file.');
                     } else {
@@ -260,6 +306,7 @@
                             if (Array.isArray(imported)) {
                                 setSubscriptions(imported);
                                 setSyncEnabled(true);
+                                localStorage.setItem('syncWasEnabled', 'true');
                                 setLastSyncTime(new Date());
                                 alert('✅ Sync enabled in READ-ONLY mode!\n\nYour data is loaded. To update it on other devices:\n1. Make your changes\n2. Click "Export"\n3. Replace the sync file in OneDrive\n4. Import again on other devices\n\nNote: Changes won\'t auto-save to the file (tablet limitation), but you can manually export.');
                             } else {
@@ -278,6 +325,7 @@
             const disableSync = () => {
                 setSyncFileHandle(null);
                 setSyncEnabled(false);
+                localStorage.removeItem('syncWasEnabled');
                 setLastSyncTime(null);
             };
 
