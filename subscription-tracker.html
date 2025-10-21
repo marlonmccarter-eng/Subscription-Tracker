@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription Tracker</title>
+    
+    <!-- PWA Configuration -->
+    <meta name="theme-color" content="#3B82F6">
+    <meta name="description" content="Track subscriptions for Marlon and Michelle">
+    
+    <!-- iOS specific -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Subscriptions">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%233B82F6'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white' font-family='Arial'>💳</text></svg>">
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="data:application/json;charset=utf-8,%7B%22name%22%3A%22Subscription%20Tracker%22%2C%22short_name%22%3A%22Subscriptions%22%2C%22description%22%3A%22Track%20subscriptions%20for%20Marlon%20and%20Michelle%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23F9FAFB%22%2C%22theme_color%22%3A%22%233B82F6%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Crect%20width%3D%27100%27%20height%3D%27100%27%20fill%3D%27%25233B82F6%27%2F%3E%3Ctext%20x%3D%2750%27%20y%3D%2770%27%20font-size%3D%2760%27%20text-anchor%3D%27middle%27%20fill%3D%27white%27%20font-family%3D%27Arial%27%3E%F0%9F%92%B3%3C%2Ftext%3E%3C%2Fsvg%3E%22%2C%22sizes%22%3A%22512x512%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%2C%22purpose%22%3A%22any%20maskable%22%7D%5D%7D">
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+        }
+        .install-prompt {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #3B82F6;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            gap: 12px;
+            max-width: 90%;
+        }
+        .install-prompt.show {
+            display: flex;
+        }
+        .install-prompt button {
+            background: white;
+            color: #3B82F6;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Install Prompt -->
+    <div id="installPrompt" class="install-prompt">
+        <span>📱 Install app on your phone</span>
+        <button onclick="installApp()">Install</button>
+        <button onclick="document.getElementById('installPrompt').classList.remove('show')" style="background: transparent; color: white;">✕</button>
+    </div>
+    
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const SubscriptionTracker = () => {
+            const [subscriptions, setSubscriptions] = useState([]);
+            const [showForm, setShowForm] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+            const [showCalendarLink, setShowCalendarLink] = useState(false);
+            const [currentCalendarLink, setCurrentCalendarLink] = useState('');
+            const [syncFileHandle, setSyncFileHandle] = useState(null);
+            const [syncEnabled, setSyncEnabled] = useState(false);
+            const [lastSyncTime, setLastSyncTime] = useState(null);
+            const [formData, setFormData] = useState({
+                name: '',
+                amount: '',
+                type: 'MONTHLY',
+                nextExpiration: '',
+                status: 'WILL RENEW',
+                owner: 'Marlon',
+                autoRenewal: 'Yes'
+            });
+            const [filter, setFilter] = useState('all'); // all, me, wife
+            const [renewalFilter, setRenewalFilter] = useState('all'); // all, auto, manual
+            const [statusFilter, setStatusFilter] = useState('all'); // all, will-renew, undecided, will-not-renew, cancelled
+            const [dateRangeFilter, setDateRangeFilter] = useState('all'); // all, upcoming-30, manual-upcoming-30
+            const [sortBy, setSortBy] = useState('date'); // date, name, amount
+
+            // Load subscriptions from localStorage on mount
+            useEffect(() => {
+                const saved = localStorage.getItem('subscriptions');
+                if (saved) {
+                    setSubscriptions(JSON.parse(saved));
+                }
+            }, []);
+
+            // Save subscriptions to localStorage whenever they change
+            useEffect(() => {
+                localStorage.setItem('subscriptions', JSON.stringify(subscriptions));
+                
+                // Auto-save to sync file if enabled
+                if (syncEnabled && syncFileHandle && subscriptions.length > 0) {
+                    saveToSyncFile(syncFileHandle, subscriptions);
+                }
+            }, [subscriptions, syncEnabled, syncFileHandle]);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                let savedSubscription;
+                if (editingId) {
+                    savedSubscription = { ...formData, id: editingId };
+                    setSubscriptions(subscriptions.map(sub => 
+                        sub.id === editingId ? savedSubscription : sub
+                    ));
+                    setEditingId(null);
+                } else {
+                    savedSubscription = { ...formData, id: Date.now() };
+                    setSubscriptions([...subscriptions, savedSubscription]);
+                }
+                
+                // Generate calendar link
+                const calendarLink = generateCalendarLink(savedSubscription);
+                setCurrentCalendarLink(calendarLink);
+                setShowCalendarLink(true);
+                
+                resetForm();
+            };
+
+            const resetForm = () => {
+                setFormData({
+                    name: '',
+                    amount: '',
+                    type: 'MONTHLY',
+                    nextExpiration: '',
+                    status: 'WILL RENEW',
+                    owner: 'Marlon',
+                    autoRenewal: 'Yes'
+                });
+                setShowForm(false);
+            };
+
+            const handleEdit = (sub) => {
+                setFormData(sub);
+                setEditingId(sub.id);
+                setShowForm(true);
+            };
+
+            const handleDelete = (id) => {
+                if (confirm('Are you sure you want to delete this subscription?')) {
+                    setSubscriptions(subscriptions.filter(sub => sub.id !== id));
+                }
+            };
+
+            const exportData = () => {
+                const dataStr = JSON.stringify(subscriptions, null, 2);
+                const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `subscriptions-backup-${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            };
+
+            const setupSyncFile = async () => {
+                try {
+                    // Check if File System Access API is supported
+                    if (!window.showSaveFilePicker) {
+                        alert('Auto-sync is not supported in this browser. Please use Chrome or Edge.\n\nYou can still use Export/Import manually.');
+                        return;
+                    }
+
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: 'subscriptions-sync.json',
+                        types: [{
+                            description: 'Subscription Data',
+                            accept: { 'application/json': ['.json'] }
+                        }]
+                    });
+
+                    // Save the file handle (note: this won't persist across sessions in most browsers)
+                    setSyncFileHandle(handle);
+                    setSyncEnabled(true);
+                    
+                    // Immediately sync current data
+                    await saveToSyncFile(handle, subscriptions);
+                    alert('Sync file created! Your data will now auto-save to this file.\n\n📁 Save this file in OneDrive to sync across devices!\n\n⚠️ Note: You may need to re-select the sync file each time you open the app.');
+                } catch (error) {
+                    if (error.name !== 'AbortError') {
+                        console.error('Error setting up sync file:', error);
+                    }
+                }
+            };
+
+            const saveToSyncFile = async (handle, data) => {
+                try {
+                    const writable = await handle.createWritable();
+                    await writable.write(JSON.stringify(data, null, 2));
+                    await writable.close();
+                    setLastSyncTime(new Date());
+                } catch (error) {
+                    console.error('Error saving to sync file:', error);
+                    setSyncEnabled(false);
+                    alert('Failed to save to sync file. You may need to re-enable sync.');
+                }
+            };
+
+            const loadFromSyncFile = async () => {
+                try {
+                    if (!window.showOpenFilePicker) {
+                        alert('Auto-sync is not supported in this browser. Please use Chrome or Edge.');
+                        return;
+                    }
+
+                    const [handle] = await window.showOpenFilePicker({
+                        types: [{
+                            description: 'Subscription Data',
+                            accept: { 'application/json': ['.json'] }
+                        }],
+                        multiple: false
+                    });
+
+                    const file = await handle.getFile();
+                    const contents = await file.text();
+                    const data = JSON.parse(contents);
+
+                    if (Array.isArray(data)) {
+                        setSubscriptions(data);
+                        setSyncFileHandle(handle);
+                        setSyncEnabled(true);
+                        setLastSyncTime(new Date());
+                        alert('Data loaded and sync enabled! Changes will auto-save to this file.');
+                    } else {
+                        alert('Invalid file format.');
+                    }
+                } catch (error) {
+                    if (error.name !== 'AbortError') {
+                        console.error('Error loading sync file:', error);
+                        alert('Error loading file. Please make sure it\'s a valid subscription backup file.');
+                    }
+                }
+            };
+
+            const enableSyncViaImport = (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const imported = JSON.parse(e.target.result);
+                            if (Array.isArray(imported)) {
+                                setSubscriptions(imported);
+                                setSyncEnabled(true);
+                                setLastSyncTime(new Date());
+                                alert('✅ Sync enabled in READ-ONLY mode!\n\nYour data is loaded. To update it on other devices:\n1. Make your changes\n2. Click "Export"\n3. Replace the sync file in OneDrive\n4. Import again on other devices\n\nNote: Changes won\'t auto-save to the file (tablet limitation), but you can manually export.');
+                            } else {
+                                alert('Invalid file format.');
+                            }
+                        } catch (error) {
+                            alert('Error reading file.');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+                // Reset the input
+                event.target.value = '';
+            };
+
+            const disableSync = () => {
+                setSyncFileHandle(null);
+                setSyncEnabled(false);
+                setLastSyncTime(null);
+            };
+
+            const importData = (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const imported = JSON.parse(e.target.result);
+                            if (Array.isArray(imported)) {
+                                if (confirm(`This will import ${imported.length} subscriptions. Do you want to replace all existing data or merge with existing?`)) {
+                                    // Replace
+                                    setSubscriptions(imported);
+                                    alert('Data imported successfully! (Replaced existing data)');
+                                } else {
+                                    // Merge - add new IDs to avoid conflicts
+                                    const merged = [...subscriptions, ...imported.map(sub => ({...sub, id: Date.now() + Math.random()}))];
+                                    setSubscriptions(merged);
+                                    alert('Data merged successfully!');
+                                }
+                            } else {
+                                alert('Invalid file format. Please select a valid backup file.');
+                            }
+                        } catch (error) {
+                            alert('Error reading file. Please make sure it\'s a valid backup file.');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+
+            const generateCalendarLink = (subscription) => {
+                // Format: YYYYMMDDTHHMMSSZ
+                const date = new Date(subscription.nextExpiration);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                
+                // Set time to 9:00 AM
+                const startDateTime = `${year}${month}${day}T090000`;
+                const endDateTime = `${year}${month}${day}T093000`; // 30 min event
+                
+                // Create event title
+                const title = encodeURIComponent(`${subscription.name} Renewal - $${subscription.amount}`);
+                
+                // Create description
+                const description = encodeURIComponent(
+                    `Subscription: ${subscription.name}\n` +
+                    `Amount: $${subscription.amount}\n` +
+                    `Type: ${subscription.type}\n` +
+                    `Owner: ${subscription.owner}\n` +
+                    `Auto Renewal: ${subscription.autoRenewal}\n` +
+                    `Status: ${subscription.status}\n\n` +
+                    `${subscription.autoRenewal === 'Yes' ? '✓ This subscription will auto-renew' : '⚠️ Action Required: Manual renewal needed'}`
+                );
+                
+                // Build Google Calendar URL
+                const calendarUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startDateTime}/${endDateTime}&details=${description}`;
+                
+                return calendarUrl;
+            };
+
+            const getStatusColor = (status) => {
+                switch(status) {
+                    case 'WILL RENEW': return 'bg-green-100 text-green-800';
+                    case 'CANCELLED': return 'bg-red-100 text-red-800';
+                    case 'WILL NOT RENEW': return 'bg-yellow-100 text-yellow-800';
+                    case 'UNDECIDED': return 'bg-blue-100 text-blue-800';
+                    default: return 'bg-gray-100 text-gray-800';
+                }
+            };
+
+            const filteredAndSorted = useMemo(() => {
+                let filtered = subscriptions;
+                
+                // Apply owner filter
+                if (filter === 'me') {
+                    filtered = filtered.filter(sub => sub.owner === 'Marlon');
+                } else if (filter === 'wife') {
+                    filtered = filtered.filter(sub => sub.owner === 'Michelle');
+                }
+
+                // Apply renewal filter
+                if (renewalFilter === 'auto') {
+                    filtered = filtered.filter(sub => sub.autoRenewal === 'Yes');
+                } else if (renewalFilter === 'manual') {
+                    filtered = filtered.filter(sub => sub.autoRenewal === 'No');
+                }
+
+                // Apply status filter
+                if (statusFilter === 'will-renew') {
+                    filtered = filtered.filter(sub => sub.status === 'WILL RENEW');
+                } else if (statusFilter === 'undecided') {
+                    filtered = filtered.filter(sub => sub.status === 'UNDECIDED');
+                } else if (statusFilter === 'will-not-renew') {
+                    filtered = filtered.filter(sub => sub.status === 'WILL NOT RENEW');
+                } else if (statusFilter === 'cancelled') {
+                    filtered = filtered.filter(sub => sub.status === 'CANCELLED');
+                }
+
+                // Apply date range filter
+                if (dateRangeFilter === 'upcoming-30') {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const thirtyDaysFromNow = new Date();
+                    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+                    thirtyDaysFromNow.setHours(23, 59, 59, 999);
+                    filtered = filtered.filter(sub => {
+                        const expDate = new Date(sub.nextExpiration);
+                        return sub.status === 'WILL RENEW' && 
+                               expDate >= today && 
+                               expDate <= thirtyDaysFromNow;
+                    });
+                } else if (dateRangeFilter === 'manual-upcoming-30') {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const thirtyDaysFromNow = new Date();
+                    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+                    thirtyDaysFromNow.setHours(23, 59, 59, 999);
+                    filtered = filtered.filter(sub => {
+                        const expDate = new Date(sub.nextExpiration);
+                        return sub.status === 'WILL RENEW' && 
+                               sub.autoRenewal === 'No' &&
+                               expDate >= today && 
+                               expDate <= thirtyDaysFromNow;
+                    });
+                }
+
+                // Apply sort
+                return [...filtered].sort((a, b) => {
+                    if (sortBy === 'date') {
+                        return new Date(a.nextExpiration) - new Date(b.nextExpiration);
+                    } else if (sortBy === 'name') {
+                        return a.name.localeCompare(b.name);
+                    } else if (sortBy === 'amount') {
+                        return parseFloat(b.amount) - parseFloat(a.amount);
+                    }
+                    return 0;
+                });
+            }, [subscriptions, filter, renewalFilter, statusFilter, dateRangeFilter, sortBy]);
+
+            const calculateTotals = () => {
+                const activeSubscriptions = subscriptions.filter(sub => sub.status === 'WILL RENEW');
+                const monthlyTotal = activeSubscriptions.reduce((sum, sub) => {
+                    const amount = parseFloat(sub.amount) || 0;
+                    return sum + (sub.type === 'MONTHLY' ? amount : amount / 12);
+                }, 0);
+                const yearlyTotal = monthlyTotal * 12;
+                return { monthlyTotal, yearlyTotal };
+            };
+
+            const { monthlyTotal, yearlyTotal } = calculateTotals();
+
+            const upcomingSoon = useMemo(() => {
+                const thirtyDaysFromNow = new Date();
+                thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+                return subscriptions.filter(sub => 
+                    sub.status === 'WILL RENEW' && 
+                    new Date(sub.nextExpiration) <= thirtyDaysFromNow
+                );
+            }, [subscriptions]);
+
+            const manualRenewalsUpcoming = useMemo(() => {
+                const thirtyDaysFromNow = new Date();
+                thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+                return subscriptions.filter(sub => 
+                    sub.status === 'WILL RENEW' && 
+                    sub.autoRenewal === 'No' &&
+                    new Date(sub.nextExpiration) <= thirtyDaysFromNow
+                );
+            }, [subscriptions]);
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <div className="max-w-7xl mx-auto">
+                        {/* Header */}
+                        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div>
+                                    <h1 className="text-3xl font-bold text-gray-800 mb-2">My Subscriptions</h1>
+                                    <p className="text-gray-600">Track subscriptions for Marlon and Michelle</p>
+                                    {syncEnabled && (
+                                        <p className="text-green-600 text-sm mt-1 flex items-center gap-2">
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                            </svg>
+                                            Auto-sync enabled {lastSyncTime && `• Last synced: ${lastSyncTime.toLocaleTimeString()}`}
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {syncEnabled ? (
+                                        <button
+                                            onClick={disableSync}
+                                            className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition font-semibold flex items-center gap-2"
+                                        >
+                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                            Disable Sync
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <button
+                                                onClick={loadFromSyncFile}
+                                                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition font-semibold flex items-center gap-2"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                </svg>
+                                                Enable Sync
+                                            </button>
+                                            <input
+                                                type="file"
+                                                id="enableSyncFile"
+                                                accept=".json"
+                                                onChange={enableSyncViaImport}
+                                                style={{ display: 'none' }}
+                                            />
+                                            <button
+                                                onClick={() => document.getElementById('enableSyncFile').click()}
+                                                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-semibold flex items-center gap-2"
+                                                title="Use this on tablet if Enable Sync doesn't show OneDrive"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                                </svg>
+                                                Sync (Tablet)
+                                            </button>
+                                            <button
+                                                onClick={() => document.getElementById('importFile').click()}
+                                                className="px-4 py-2 border-2 border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition font-semibold flex items-center gap-2"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                                                </svg>
+                                                Import
+                                            </button>
+                                        </>
+                                    )}
+                                    <input
+                                        type="file"
+                                        id="importFile"
+                                        accept=".json"
+                                        onChange={importData}
+                                        style={{ display: 'none' }}
+                                    />
+                                    <button
+                                        onClick={exportData}
+                                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold flex items-center gap-2"
+                                    >
+                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                                        </svg>
+                                        Export
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Summary Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+                            <div className="bg-blue-50 rounded-lg p-6 border border-blue-200">
+                                <div className="text-sm text-blue-600 font-semibold mb-1">TOTAL SUBSCRIPTIONS</div>
+                                <div className="text-3xl font-bold text-blue-900">{subscriptions.length}</div>
+                            </div>
+                            <div className="bg-green-50 rounded-lg p-6 border border-green-200">
+                                <div className="text-sm text-green-600 font-semibold mb-1">AUTO RENEWAL</div>
+                                <div className="text-3xl font-bold text-green-900">{subscriptions.filter(s => s.autoRenewal === 'Yes').length}</div>
+                            </div>
+                            <div className="bg-indigo-50 rounded-lg p-6 border border-indigo-200">
+                                <div className="text-sm text-indigo-600 font-semibold mb-1">NEED DECISION</div>
+                                <div className="text-3xl font-bold text-indigo-900">{subscriptions.filter(s => s.status === 'UNDECIDED').length}</div>
+                            </div>
+                            <div className="bg-emerald-50 rounded-lg p-6 border border-emerald-200">
+                                <div className="text-sm text-emerald-600 font-semibold mb-1">MONTHLY COST</div>
+                                <div className="text-3xl font-bold text-emerald-900">${monthlyTotal.toFixed(2)}</div>
+                            </div>
+                            <div className="bg-purple-50 rounded-lg p-6 border border-purple-200">
+                                <div className="text-sm text-purple-600 font-semibold mb-1">YEARLY COST</div>
+                                <div className="text-3xl font-bold text-purple-900">${yearlyTotal.toFixed(2)}</div>
+                            </div>
+                        </div>
+
+                        {/* Upcoming Renewals Alert */}
+                        {upcomingSoon.length > 0 && (
+                            <div 
+                                onClick={() => {
+                                    setFilter('all');
+                                    setRenewalFilter('all');
+                                    setStatusFilter('all');
+                                    setDateRangeFilter('upcoming-30');
+                                    window.scrollTo({ top: document.querySelector('.bg-white.rounded-lg.shadow-md.overflow-hidden')?.offsetTop - 20, behavior: 'smooth' });
+                                }}
+                                className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6 cursor-pointer hover:bg-orange-100 transition"
+                            >
+                                <div className="flex items-center">
+                                    <svg className="w-5 h-5 text-orange-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                    </svg>
+                                    <div className="flex-1">
+                                        <strong className="text-orange-900">{upcomingSoon.length} subscription{upcomingSoon.length > 1 ? 's' : ''} renewing soon</strong>
+                                        <span className="text-orange-700"> (within 30 days)</span>
+                                    </div>
+                                    <span className="text-orange-600 text-sm font-semibold">Click to view →</span>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Manual Renewal Alert */}
+                        {manualRenewalsUpcoming.length > 0 && (
+                            <div 
+                                onClick={() => {
+                                    setFilter('all');
+                                    setRenewalFilter('all');
+                                    setStatusFilter('all');
+                                    setDateRangeFilter('manual-upcoming-30');
+                                    window.scrollTo({ top: document.querySelector('.bg-white.rounded-lg.shadow-md.overflow-hidden')?.offsetTop - 20, behavior: 'smooth' });
+                                }}
+                                className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 cursor-pointer hover:bg-red-100 transition"
+                            >
+                                <div className="flex items-center">
+                                    <svg className="w-5 h-5 text-red-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                    </svg>
+                                    <div className="flex-1">
+                                        <strong className="text-red-900">⚠ Action Required: {manualRenewalsUpcoming.length} manual renewal{manualRenewalsUpcoming.length > 1 ? 's' : ''}</strong>
+                                        <span className="text-red-700"> - These subscriptions need manual renewal within 30 days</span>
+                                    </div>
+                                    <span className="text-red-600 text-sm font-semibold">Click to view →</span>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Undecided Subscriptions Alert */}
+                        {subscriptions.filter(s => s.status === 'UNDECIDED').length > 0 && (
+                            <div 
+                                onClick={() => {
+                                    setFilter('all');
+                                    setRenewalFilter('all');
+                                    setStatusFilter('undecided');
+                                    setDateRangeFilter('all');
+                                    window.scrollTo({ top: document.querySelector('.bg-white.rounded-lg.shadow-md.overflow-hidden')?.offsetTop - 20, behavior: 'smooth' });
+                                }}
+                                className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 cursor-pointer hover:bg-blue-100 transition"
+                            >
+                                <div className="flex items-center">
+                                    <svg className="w-5 h-5 text-blue-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                    <div className="flex-1">
+                                        <strong className="text-blue-900">💭 Decision Needed: {subscriptions.filter(s => s.status === 'UNDECIDED').length} subscription{subscriptions.filter(s => s.status === 'UNDECIDED').length > 1 ? 's' : ''}</strong>
+                                        <span className="text-blue-700"> - Review and decide whether to renew or cancel</span>
+                                    </div>
+                                    <span className="text-blue-600 text-sm font-semibold">Click to view →</span>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Controls */}
+                        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                            {/* Active Filter Indicator */}
+                            {dateRangeFilter !== 'all' && (
+                                <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                                    <div className="flex items-center">
+                                        <svg className="w-5 h-5 text-blue-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clipRule="evenodd" />
+                                        </svg>
+                                        <span className="text-blue-900 font-semibold">
+                                            {dateRangeFilter === 'upcoming-30' && 'Showing subscriptions renewing within 30 days'}
+                                            {dateRangeFilter === 'manual-upcoming-30' && 'Showing manual renewals within 30 days'}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            setDateRangeFilter('all');
+                                            setFilter('all');
+                                            setRenewalFilter('all');
+                                            setStatusFilter('all');
+                                        }}
+                                        className="text-blue-600 hover:text-blue-800 font-semibold flex items-center"
+                                    >
+                                        Clear Filter
+                                        <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            )}
+                            
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div className="flex gap-4 flex-wrap">
+                                    <div>
+                                        <label className="text-sm text-gray-600 mb-1 block">Filter by Owner</label>
+                                        <select 
+                                            value={filter} 
+                                            onChange={(e) => {
+                                                setFilter(e.target.value);
+                                                setDateRangeFilter('all');
+                                            }}
+                                            className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="all">All Subscriptions</option>
+                                            <option value="me">Marlon's Subscriptions</option>
+                                            <option value="wife">Michelle's Subscriptions</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-600 mb-1 block">Filter by Renewal</label>
+                                        <select 
+                                            value={renewalFilter} 
+                                            onChange={(e) => {
+                                                setRenewalFilter(e.target.value);
+                                                setDateRangeFilter('all');
+                                            }}
+                                            className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="all">All Types</option>
+                                            <option value="auto">Auto Renewal Only</option>
+                                            <option value="manual">Manual Renewal Only</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-600 mb-1 block">Filter by Status</label>
+                                        <select 
+                                            value={statusFilter} 
+                                            onChange={(e) => {
+                                                setStatusFilter(e.target.value);
+                                                setDateRangeFilter('all');
+                                            }}
+                                            className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="all">All Statuses</option>
+                                            <option value="will-renew">Will Renew</option>
+                                            <option value="undecided">Undecided</option>
+                                            <option value="will-not-renew">Will Not Renew</option>
+                                            <option value="cancelled">Cancelled</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-600 mb-1 block">Sort by</label>
+                                        <select 
+                                            value={sortBy} 
+                                            onChange={(e) => setSortBy(e.target.value)}
+                                            className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="date">Expiration Date</option>
+                                            <option value="name">Name</option>
+                                            <option value="amount">Amount</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={() => setShowForm(!showForm)}
+                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-semibold"
+                                >
+                                    {showForm ? 'Cancel' : '+ Add Subscription'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Add/Edit Form */}
+                        {showForm && (
+                            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                    {editingId ? 'Edit Subscription' : 'Add New Subscription'}
+                                </h2>
+                                <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Name</label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={formData.name}
+                                            onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            placeholder="Netflix, Spotify, etc."
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Amount</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            required
+                                            value={formData.amount}
+                                            onChange={(e) => setFormData({...formData, amount: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            placeholder="9.99"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Type</label>
+                                        <select
+                                            value={formData.type}
+                                            onChange={(e) => setFormData({...formData, type: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="MONTHLY">Monthly</option>
+                                            <option value="YEARLY">Yearly</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Next Expiration</label>
+                                        <input
+                                            type="date"
+                                            required
+                                            value={formData.nextExpiration}
+                                            onChange={(e) => setFormData({...formData, nextExpiration: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Status</label>
+                                        <select
+                                            value={formData.status}
+                                            onChange={(e) => setFormData({...formData, status: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="WILL RENEW">Will Renew</option>
+                                            <option value="UNDECIDED">Undecided</option>
+                                            <option value="WILL NOT RENEW">Will Not Renew</option>
+                                            <option value="CANCELLED">Cancelled</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Owner</label>
+                                        <select
+                                            value={formData.owner}
+                                            onChange={(e) => setFormData({...formData, owner: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="Marlon">Marlon</option>
+                                            <option value="Michelle">Michelle</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">Auto Renewal</label>
+                                        <select
+                                            value={formData.autoRenewal}
+                                            onChange={(e) => setFormData({...formData, autoRenewal: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="Yes">Yes - Auto Renews</option>
+                                            <option value="No">No - Manual Renewal</option>
+                                        </select>
+                                    </div>
+                                    <div className="md:col-span-2 flex gap-3 justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={resetForm}
+                                            className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
+                                        >
+                                            {editingId ? 'Update' : 'Add'} Subscription
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        )}
+
+                        {/* Calendar Link Notification */}
+                        {showCalendarLink && (
+                            <div className="bg-green-50 border-2 border-green-300 rounded-lg p-6 mb-6 shadow-lg">
+                                <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                        <div className="flex items-center mb-3">
+                                            <svg className="w-6 h-6 text-green-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                            </svg>
+                                            <h3 className="text-lg font-bold text-green-900">Subscription Saved Successfully!</h3>
+                                        </div>
+                                        <p className="text-green-800 mb-4">Would you like to add this renewal date to your Google Calendar?</p>
+                                        <div className="flex gap-3 flex-wrap">
+                                            <a
+                                                href={currentCalendarLink}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition font-semibold shadow-md"
+                                            >
+                                                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                                                </svg>
+                                                Add to Google Calendar
+                                            </a>
+                                            <button
+                                                onClick={() => setShowCalendarLink(false)}
+                                                className="px-6 py-3 border-2 border-green-600 text-green-700 rounded-lg hover:bg-green-100 transition font-semibold"
+                                            >
+                                                Maybe Later
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowCalendarLink(false)}
+                                        className="text-green-600 hover:text-green-800 ml-4"
+                                    >
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Subscriptions List */}
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            {filteredAndSorted.length === 0 ? (
+                                <div className="text-center py-12 text-gray-500">
+                                    <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                    <p className="text-lg">No subscriptions found</p>
+                                    <p className="text-sm">Click "Add Subscription" to get started</p>
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead className="bg-gray-50 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Name</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Owner</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Amount</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Type</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Next Expiration</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Auto Renewal</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Status</th>
+                                                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-200">
+                                            {filteredAndSorted.map((sub) => (
+                                                <tr key={sub.id} className="hover:bg-gray-50">
+                                                    <td className="px-6 py-4 whitespace-nowrap font-semibold text-gray-900">{sub.name}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                                                            {sub.owner}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-gray-900">${sub.amount}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">{sub.type}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                                                        {new Date(sub.nextExpiration).toLocaleDateString('en-GB', { 
+                                                            day: '2-digit',
+                                                            month: 'short',
+                                                            year: '2-digit'
+                                                        }).toUpperCase().replace(/,/g, '')}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${sub.autoRenewal === 'Yes' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
+                                                            {sub.autoRenewal === 'Yes' ? '✓ Auto' : '⚠ Manual'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(sub.status)}`}>
+                                                            {sub.status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                        <a
+                                                            href={generateCalendarLink(sub)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="text-green-600 hover:text-green-900 mr-4"
+                                                            title="Add to Calendar"
+                                                        >
+                                                            📅
+                                                        </a>
+                                                        <button
+                                                            onClick={() => handleEdit(sub)}
+                                                            className="text-blue-600 hover:text-blue-900 mr-4"
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleDelete(sub.id)}
+                                                            className="text-red-600 hover:text-red-900"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="text-center mt-8 text-gray-600 text-sm">
+                            <p>All data is stored locally in your browser.</p>
+                            <p className="mt-1">💡 <strong>Tip:</strong> Add this app to your phone's home screen for easy access!</p>
+                            <p className="mt-1">📅 Click the calendar icon (📅) to add renewal dates to Google Calendar</p>
+                            <p className="mt-1 text-purple-600 font-semibold">
+                                🔄 Sync Options: Computer & Phone use "Enable Sync" • Tablet use "Sync (Tablet)"
+                            </p>
+                            <p className="mt-1 text-xs">
+                                If "Enable Sync" doesn't show OneDrive on your device, use "Sync (Tablet)" instead
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<SubscriptionTracker />, document.getElementById('root'));
+    </script>
+
+    <!-- PWA Installation Script -->
+    <script>
+        let deferredPrompt;
+        
+        // Capture the install prompt event
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            // Show install prompt
+            document.getElementById('installPrompt').classList.add('show');
+        });
+        
+        // Install function
+        function installApp() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        console.log('App installed');
+                    }
+                    deferredPrompt = null;
+                    document.getElementById('installPrompt').classList.remove('show');
+                });
+            }
+        }
+        
+        // Hide prompt after installation
+        window.addEventListener('appinstalled', () => {
+            document.getElementById('installPrompt').classList.remove('show');
+            console.log('App was installed');
+        });
+        
+        // Check if already installed
+        if (window.matchMedia('(display-mode: standalone)').matches) {
+            console.log('App is running in standalone mode');
+        }
+    </script>
+</body>
+</html>
